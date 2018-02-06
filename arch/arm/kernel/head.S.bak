@@ -1,0 +1,774 @@
+/*
+ *  linux/arch/arm/kernel/head.S
+ *
+ *  Copyright (C) 1994-2002 Russell King
+ *  Copyright (c) 2003 ARM Limited
+ *  All Rights Reserved
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ *  Kernel startup code for all 32-bit CPUs
+ */
+#include <linux/linkage.h>
+#include <linux/init.h>
+
+#include <asm/assembler.h>
+#include <asm/domain.h>
+#include <asm/ptrace.h>
+#include <asm/asm-offsets.h>
+#include <asm/memory.h>
+#include <asm/thread_info.h>
+#include <asm/system.h>
+
+#ifdef CONFIG_DEBUG_LL
+#include <mach/debug-macro.S>
+#endif
+
+/*
+ * swapper_pg_dir is the virtual address of the initial page table.
+ * We place the page tables 16K below KERNEL_RAM_VADDR.  Therefore, we must
+ * make sure that KERNEL_RAM_VADDR is correctly set.  Currently, we expect
+ * the least significant 16 bits to be 0x8000, but we could probably
+ * relax this restriction to KERNEL_RAM_VADDR >= PAGE_OFFSET + 0x4000.
+ */
+
+//KERNEL_RAM_VADDR ÊÇ 0xc0008000
+/*
+0xC0008000	ÄÚºËÔÚÄÚ´æÖĞµÄĞéÄâµØÖ·
+PAGE_OFFSET 0xC0000000	ÄÚºËĞéÄâµØÖ·¿Õ¼äµÄÆğÊ¼µØÖ·
+TEXT_OFFSET	arch/arm/Makefile	0x00008000	ÄÚºËÆğÊ¼Î»ÖÃÏà¶ÔÓÚÄÚ´æÆğÊ¼Î»ÖÃµÄÆ«ÒÆ
+swapper_pg_dir  0xc0004000
+
+*/
+#define KERNEL_RAM_VADDR	(PAGE_OFFSET + TEXT_OFFSET)
+#if (KERNEL_RAM_VADDR & 0xffff) != 0x8000
+#error KERNEL_RAM_VADDR must start at 0xXXXX8000
+#endif
+
+	.globl	swapper_pg_dir
+	.equ	swapper_pg_dir, KERNEL_RAM_VADDR - 0x4000
+
+	.macro	pgtbl, rd, phys
+	add	\rd, \phys, #TEXT_OFFSET - 0x4000
+	.endm
+
+#ifdef CONFIG_XIP_KERNEL
+#define KERNEL_START	XIP_VIRT_ADDR(CONFIG_XIP_PHYS_ADDR)
+#define KERNEL_END	_edata_loc
+#else
+
+
+// ÕâÀï´æµÄÓ¦¸ÃÊÇĞéÄâµØÖ·
+#define KERNEL_START	KERNEL_RAM_VADDR
+#define KERNEL_END	_end
+#endif
+
+/*
+ * Kernel startup entry point.
+ * ---------------------------
+ *
+ * This is normally called from the decompressor code.  The requirements
+ * are: MMU = off, D-cache = off, I-cache = dont care, r0 = 0,
+ * r1 = machine nr, r2 = atags or dtb pointer.
+ *r2 ÔÚtq210ÖĞºÃÏñÊÇ  0x20000100
+ * This code is mostly position independent, so if you link the kernel at
+ * 0xc0008000, you call this at __pa(0xc0008000).
+ *	
+ * See linux/arch/arm/tools/mach-types for the complete list of machine
+ * numbers for r1.
+ *
+ * We're trying to keep crap to a minimum; DO NOT add any machine specific
+ * crap here - that's what the boot loader (or in extreme, well justified
+ * circumstances, zImage) is for.
+ */
+	__HEAD
+ENTRY(stext)
+	setmode	PSR_F_BIT | PSR_I_BIT | SVC_MODE, r9 @ ensure svc mode //¹Ø±ÕÆÕÍ¨ÖĞ¶Ï£¬¿ìËÙÖĞ¶Ï£¬Ê¹ÄÜsvcÄ£Ê½				
+	mrc	p15, 0, r9, c0, c0		@ get processor id  // »ñµÃĞ¾Æ¬ID
+	
+	//__lookup_processor_typeº¯Êı¸ù¾İÇ°Ãæ¶Á³öµÄCPU ID(´æÔÚr9¼Ä´æÆ÷ÖĞ)£¬´ÓÕâĞ©proc_info_list½á¹¹ÖĞÕÒ³öÆ¥ÅäµÄ
+	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid  //»ñµÃ´¦ÀíÆ÷ĞÍºÅ£¬r5 == id£¬#1
+	movs	r10, r5					@ invalid processor (r5=0)?  //Ğ£ÑéÕıÈ·ĞÔ£¬0´íÎó
+ THUMB( it	eq )					@ force fixup-able long branch encoding
+	beq	__error_p					@ yes, error 'p'
+
+
+/*
+Õâ¶Î´úÂëÍ¦ÓĞÒâË¼£¬¾ÍÊÇËã³öÎïÀíµØÖ·µÄÆğÊ¼µØÖ·£¬¾Ù¸öÀı×Ó
+¼ÙÉè 
+	r3 = 0x2000 0020
+	r4 = 0xc000 0020
+	r8 = 0xc000 0000
+
+	ÄÇÃ´ÏÂÃæµÄ¹«Ê½¿ÉÒÔÀí½âÎª
+	r3-r4+r8
+	Ò²¾ÍÊÇ r3 - (r4 -r8)
+	ĞéÄâµØÖ·Æ«²î¶àÉÙ£¬¾ÍÓÃÎïÀíµØÖ·¼õÈ¥¶àÉÙ
+
+*/
+
+#ifndef CONFIG_XIP_KERNEL   //»ñÈ¡ÄÚ´æµÄÎïÀíµØÖ·,´æÔÚr8ÖĞ£¬Õâ¸öÔËĞĞÍêÁËr8¾ÍÓ¦¸ÃÊÇ 0x2000 0000 
+	adr	r3, 2f       // r3£½ µÚ124ĞĞ´úÂëµÄÎïÀíµØÖ·£¬È¡ÔËĞĞÊ±µØÖ·£¬ËùÒÔÊÇÎïÀíµØÖ·
+	ldmia	r3, {r4, r8}   // £À r4£½ µÚ124ĞĞ´úÂëµÄĞéËÆµØÖ·£¬r8=PAGE_OFFSET
+	sub	r4, r3, r4			@ (PHYS_OFFSET - PAGE_OFFSET)
+	add	r8, r8, r4			@ PHYS_OFFSET
+#else
+	ldr	r8, =PLAT_PHYS_OFFSET
+#endif
+
+	/*
+	 * r1 = machine no, r2 = atags or dtb,
+	 * r8 = phys_offset, r9 = cpuid, r10 = procinfo
+	 */
+	bl	__vet_atags  //@ ¼ì²ébootloader´«ÈëµÄ²ÎÊıÁĞ±íatagsµÄºÏ·¨ĞÔ
+#ifdef CONFIG_SMP_ON_UP
+	bl	__fixup_smp
+#endif
+#ifdef CONFIG_ARM_PATCH_PHYS_VIRT
+	bl	__fixup_pv_table
+#endif
+/*
+ ÔÚ2.6.39°æ±¾Ç°£¬»¹Ôö¼ÓÁË__lookup_machine_type°å¼¶ÀàĞÍÖ§³ÖµÄ¼ì²é£¬ÕâÀïÒÑ¾­±»È¡Ïû£¬
+ È´Ôö¼ÓÁË84£­91ĞĞµÄ´úÂë£¬²¢ÇÒ³ıµÚ97ĞĞÍâ£¬ÆäËüÓĞĞ©ÊÇÃ»ÓĞµÄ
+*/
+	bl	__create_page_tables
+
+	/*
+	 * The following calls CPU specific code in a position independent
+	 * manner.  See arch/arm/mm/proc-*.S for details.  r10 = base of
+	 * xxx_proc_info structure selected by __lookup_processor_type
+	 * above.  On return, the CPU will be ready for the MMU to be
+	 * turned on, and r0 will hold the CPU control register value.
+	 */
+/*
+ldr	r13, =__mmap_switched		@ address to jump to after
+ÕâÒ»¾ä»° ·´»ã±àÖ®ºó 
+c000802c:	e59fd00c 	ldr	sp, [pc, #12]	; c0008040 <stext+0x40>
+
+ÕÒµ½c0008040 Õâ¸öµØÖ··¢ÏÖ
+c0008040:	c0008180 	andgt	r8, r0, r0, lsl #3
+ÔÚËÑË÷c0008180 ·¢ÏÖ
+c0008180 <__mmap_switched>:  Õâ¸öÊı¾İÊÇ __mmap_switchedµÄÁ´½ÓµØÖ·£¬
+ËùÒÔldr	r13, =__mmap_switched Ò²¾ÍÊÇÕÒ³öÕâ¸ö±êºÅµÄÁ´½ÓµØÖ·£¬¸ør13.
+ÕâÑùµ±mmu¿ªÆôÖ®ºó£¬¾Í¿ÉÒÔÖ±½Ó½øĞĞÌø×ªÁË¡£
+
+
+ÕâÒ»¾äÊ®·ÖÖØÒªÒ²ÖµµÃÈ¥Ï¸Ï¸ÍÆÇÃ£¬¿´ËÆÃ»ÓĞÊ²Ã´ÓÃÍ¾£¬µ«ÊÇÔÚºó±ß¿ªÆôMMUºó½øÈëĞéµØÖ·
+¿Õ¼ä£¨linkµØÖ·£©µÄ²¿·ÖÖÁ¹ØÖØÒª£¡ÒòÎª£¬¸ÃÎ±Ö¸Áî»á½«__switch_data¶ÔÓ¦µÄĞéµØÖ·¼ÓÔØ¸ør13
+¼Ä´æÆ÷£¬ºóÃæ»áÍ¨¹ı½«r13¼ÓÔØ½øpc£¨Ö¸Áî¼ÆÊıÆ÷£©´ïµ½½øÈëĞéµØÖ·Ä£Ê½µÄÄ¿µÄ£¡Ò²¾ÍÊÇËµ´ËÇ°µÄ
+ËùÓĞ´úÂë¹¤×÷ÓÚPIC£¨position independent code£©£¬²¢Ã»ÓĞÊ¹ÓÃlinkµØÖ·£¬Àí½âÕâÒ»µãºÜÖØÒª£¡
+*/
+
+	ldr	r13, =__mmap_switched		@ address to jump to after
+						@ mmu has been enabled
+	adr	lr, BSYM(1f)			@ return (PIC) address  ½«lrÉèÖÃÎª __enable_mmu µÄµØÖ·
+	mov	r8, r4				@ set TTBR1 to swapper_pg_dir
+
+/*
+r10´æ´¢µÄÊÇprocinfoµÄ»ùµØÖ·, PROCINFO_INITFUNCÊÇÔÚ arch/arm/kernel/asm-offsets.c ÖĞ110ĞĞ¶¨Òå.
+¸ÃĞĞ½«pcÉèÎª proc_info_listµÄ __cpu_flush º¯ÊıµÄµØÖ·,£
+¨DEFINE(PROCINFO_INITFUNC,     offsetof(struct proc_info_list, __cpu_flush)£©
+¼´ÏÂÃæÌø×ªµ½¸Ãº¯Êı.ÔÚ·ÖÎö __lookup_processor_type µÄÊ±ºò,ÎÒÃÇÒÑ¾­ÖªµÀ,¶ÔÓÚ tq210 À´Ëµ,
+Æä__cpu_flushÖ¸ÏòµÄÊÇº¯Êı __v7_setup  ,²Î¿´arc/arm/mm/proc-v7.S
+*/
+ ARM(	add	pc, r10, #PROCINFO_INITFUNC	)
+ THUMB(	add	r12, r10, #PROCINFO_INITFUNC	)
+ THUMB(	mov	pc, r12				)
+1:	b	__enable_mmu
+ENDPROC(stext)
+	.ltorg
+#ifndef CONFIG_XIP_KERNEL
+2:	.long	.    //ÕâÀï·Å¸öµãÔÚÕâÀïÓ¦¸ÃÊÇ°Ñµ±Ç°µÄµØÖ··ÅÔÚÕâÀï£¬¶øÓÖÒòÎªÊÇÁ´½ÓµØÖ·£¬ËùÒÔ¿Ï¶¨ÊÇĞéÄâµØÖ·
+	.long	PAGE_OFFSET  //0xC0000000
+#endif
+
+/*
+ * Setup the initial page tables.  We only setup the barest
+ * amount which are required to get the kernel running, which
+ * generally means mapping in the kernel code.
+ *
+ * r8 = phys_offset, r9 = cpuid, r10 = procinfo
+ *
+ * Returns:
+ *  r0, r3, r5-r7 corrupted
+ *  r4 = physical page table address
+
+ phys_offset ÎïÀíÄÚ´æµÄÆğÊ¼µØÖ·
+ */
+/*
+ÕâÀï,ÎÒÃÇÊ¹ÓÃµÄÊÇarmµÄL1Ö÷Ò³±í,L1Ö÷Ò³±íÒ²³ÆÎª¶ÎÒ³±í(section page table)£¬ L1 Ö÷Ò³±í½«4 GB µÄ
+µØÖ·¿Õ¼ä·Ö³ÉÈô¸É¸ö1 MBµÄ¶Î(section),Òò´ËL1Ò³±í°üº¬4096¸öÒ³±íÏî(section entry). Ã¿¸öÒ³±íÏîÊÇ
+32 bits(4 bytes)Òò¶øL1Ö÷Ò³±íÕ¼ÓÃ 4096 *4 = 16kµÄÄÚ´æ¿Õ¼ä.
+
+.macro	pgtbl, rd, phys
+	add	\rd, \phys, #TEXT_OFFSET - 0x4000
+	.endm
+
+pgtbl	r4, r8	
+
+×ª»»³É   r4 = r8 + TEXT_OFFSET - 0x4000
+			0x2000 0000 +   0x0000 8000 - 0x4000
+
+¿ÉÒÔ¿´µ½,Ò³±íÊÇÎ»ÓÚ TEXT_OFFSETÏÂÃæ 16k µÄÎ»ÖÃ£¬r4 =  0x20004000 ÕâÊÇ×ª»»±íµÄÎïÀí»ùµØÖ·£¬
+×îÖÕ½«Ğ´ÈëCP15 µÄ¼Ä´æÆ÷ 2 £¬ C2 ¡£Õâ¸öÖµ±ØĞëÊÇ 16K ¶ÔÆëµÄ¡£
+*/
+
+__create_page_tables:
+	pgtbl	r4, r8				@ page table address
+
+	/*
+	 * Clear the 16K level 1 swapper page table
+	 */
+	mov	r0, r4  			//£À½«Ò³±í»ùµØÖ·´æÔÚr0ÖĞ
+	mov	r3, #0   			//£À ½« r3 ÖÃ³É0
+	add	r6, r0, #0x4000   	//£Àr6  = Ò³±í»ùµØÖ· + 16k, ¿ÉÒÔ¿´µ½ÕâÊÇÒ³±íµÄÎ²µØÖ·
+1:	str	r3, [r0], #4 	 	// £À148 - 153ĞĞ: Ñ­»·,´Ó r0 µ½ r6 ½«Õâ16kÒ³±íÓÃ0Ìî³ä.
+	str	r3, [r0], #4
+	str	r3, [r0], #4
+	str	r3, [r0], #4
+	teq	r0, r6
+	bne	1b
+//´Ó proc_info_list½á¹¹ÖĞ»ñÈ¡×Ö¶Î __cpu_mm_mmu_flags £¬¸Ã×Ö¶Î°üº¬ÁË´æ´¢¿Õ¼ä·ÃÎÊÈ¨ÏŞµÈ,
+//²¢´æ´¢µ½ r7ÖĞ,´Ë´¦Ö¸ÁîÖ´ĞĞÖ®ºó r7=0x00000c1e,(ºêPROCINFO_MM_MMUFLAGSÊÇ
+//ÔÚarch/arm/kernel/asm-offsets.cÖĞ¶¨Òå)
+//// r10 Ö¸Ïò¿ª·¢°åÏìÓ¦µÄproc_info ½á¹¹Ìå
+////PROCINFO_MM_MMUFLAGS = 8
+	ldr	r7, [r10, #PROCINFO_MM_MMUFLAGS] @ mm_mmuflags
+
+	/*
+	 * Create identity mapping to cater for __enable_mmu.
+	 * This identity mapping will be removed by paging_init().
+	 */
+/*
+__enable_mmu_loc:
+	.long	.
+	.long	__enable_mmu
+	.long	__enable_mmu_end
+
+
+*/
+/*
+¼ÙÉè r0 = 2000 0020
+	r3 = c000 0020   ÕâÁ½¸öµØÖ·ÊÇÍ¬Ò»¸öµØÖ·
+
+	r5 =  c000 0090
+ÄÇÃ´  r5 = r5 + r0 - r3  ´ÓÄ³Ò»¸öĞéÄâµØÖ·¾Í¿ÉÒÔËã³öÎïÀíµØÖ·
+
+*/
+
+/*
+c000804c t __create_page_tables
+c0008100 t __enable_mmu_loc
+c000810c t __enable_mmu
+c0008120 t __turn_mmu_on
+c0008138 t __enable_mmu_end
+
+*/
+
+
+	adr	r0, __enable_mmu_loc   //È¡__enable_mmu_locµÃÔËĞĞµØÖ··Åµ½r0,ÔËĞĞÊ±µØÖ·£¬´ËÊ±ÊÇÎïÀíµØÖ·
+	ldmia	r0, {r3, r5, r6}
+	sub	r0, r0, r3			@ virt->phys offset // Í¬Ò»¸öµØÖ·µÄĞéÄâµØÖ·¸úÎïÀíµØÖ·µÄÆ«ÒÆ
+	add	r5, r5, r0			@ phys __enable_mmu  // Êµ¼Ê¾ÍÊÇÈ¡µÃÕâ¸ö±êºÅµÄÎïÀíµØÖ·
+	add	r6, r6, r0			@ phys __enable_mmu_end  // È¡µÃÕâ¸ö±êºÅµÄÎïÀíµØÖ·
+	mov	r5, r5, lsr #20   //ÖµÓÒÒÆ20Î»£¬µÃµ½µ±Ç°ÎïÀíµØÖ·ËùÔÚµÄ¶Î,Ò»¶Î¾ÍÊÇ1M
+	mov	r6, r6, lsr #20
+
+
+	// @ r3 = r7 | (r5 << 20);flags + kernel baseµÃµ½Ò³±íÖĞĞèÒªÉèÖÃµÄÖµ.
+
+1:	orr	r3, r7, r5, lsl #20		@ flags + kernel base
+//ÉèÖÃÒ³±í: mem[r4 + r5 * 4] = r3,ÕâÀï,ÒòÎªÒ³±íµÄÃ¿Ò»ÏîÊÇ32 bits(4 bytes),ËùÒÔÒª³ËÒÔ4(<<2).
+//°Ñr3ÖĞµÄÊı¾İ£¬·Åµ½memÕâ¸öµØÖ·ÖĞÈ¥£¬×¢Òâr4ÊÇÉÏÃæËã³öµÄ»ùµØÖ·
+	str	r3, [r4, r5, lsl #2]		@ identity mapping
+	//ÉÏÃæÕâ¶şĞĞ,ÉèÖÃÁËkernelµ±Ç°ÔËĞĞµÄsection(ÎïÀíµØÖ·ËùÔÚµÄpage entry)µÄÒ³±íÏî
+	// ÆäÊµÎÒÊÇ¾õµÃÆäÊµÊÇ°Ñ__enable_mmu µ½ __enable_mmu_endµÄµÄÒ³±íÏîÉè¶¨ºÃ
+	//ÕâÀïÆäÊµÊÇ×öÁËÒ»¸öºãµÈÓ³Éä£¬½«(2000810c t __enable_mmu) ÕâÀïµÄ1MµØÖ·Ó³ÉäÎª
+	// 0x20008000 ºÃÈÃÒ³±íÔÚ¿ªÆôµÄ¹ı³ÌÖĞ£¬²»ÖÁÓÚ³ö´í¡£
+	teq	r5, r6
+	addne	r5, r5, #1			@ next section
+	bne	1b
+//×¢Òâ£¬ÔÚÒ³±íÖĞÄÄ¸öÎ»ÖÃ´æ·Å£¬ÊÇ¸úĞéÄâµØÖ·Ïà¹Ø£¬´æ·ÅµÄÊÇÊ²Ã´£¬ÊÇ¸úÎïÀíµØÖ·Ïà¹Ø
+//cpuÔÚ·ÃÎÊĞéÄâµØÖ·µÄÊ±ºò£¬»á´ÓÒ³±íµÄ»ùµØÖ·¿ªÊ¼ÕÒµ½Õâ¸öĞéÄâµØÖ·¶ÔÓ¦µÄÒ³±íÓ¦¸Ã
+// ÔÚÊ²Ã´µØ·½£¬È»ºóÈ¡³öÆäÖĞµÄÎïÀíµØÖ·
+	/*
+	 * Now setup the pagetables for our kernel direct
+	 * mapped region.
+	 */
+	 /*
+	KERNEL_START:	0xc0008000
+r4 =  0x20004000 ÕâÊÇ×ª»»±íµÄÎïÀí»ùµØÖ·£¬
+
+
+	 *///ÕâÒ»Ğ¡¶ÎÊÇ»ñµÃÒ³±íÖĞĞèÒª´æ·ÅµÄÊÇÊ²Ã´£¬Õâ¸öÊÇ¸úÎïÀíµØÖ·Ïà¹ØµÄ£¬ÖÁÓÚ·ÅÔÚÒ³±íÖĞÄÄ¸öÎ»ÖÃ
+	 //ÊÇÔÚÏÂÃæµÄ
+	mov	r3, pc   //  µ±Ç°ÔËĞĞµÄÎïÀíµØÖ·
+	mov	r3, r3, lsr #20  //µ±Ç°ÔËĞĞµÄÎïÀíµØÖ·µÄ¶Î»ùÖ·,½«r3ÓÒÒÆ¶¯20Î»
+	orr	r3, r7, r3, lsl #20   //µÃµ½Ò³±íÖĞËùĞèÒªÉè¶¨µÄÖµ,Ò²¾ÍÊÇÎïÀí¶Î»ùÖ·»òÉÏ·ÃÎÊÈ¨ÏŞ
+
+	/*
+	//ÓÃ¾ÍÊÇ½«Õû¸öÄÚºËImageÓ³Éäµ½ÒÔ0xC0008000
+	 //ÎªÆğÊ¼µØÖ·µÄĞéÄâµØÖ·´¦£¬×¢ÒâÏÂÃæÁ½¸öÒÆ¶¯¿ÉÒÔºÏ²¢ÎªÒ»¾ä»°£¬ÒòÎªARMÖ¸Áî¼¯µÄ8bitÎ»Í¼ÎÊÌâ£¬Ö»ÄÜ·ÖÁ½´ÎµÃµ½
+	 ¡//mem[r4 + (0xC0008000 & 0xfff00000) >> 18] = r3
+	 //ÆäÊµÊÇÓÒÒÆ20Î»È»ºó³ËÒÔ4£¬Ïëµ±ÓÚÓÒÒÆ18Î»,ÒòÎªÒ»¸öÒ³±íÏîÕ¼4¸ö×Ö½Ú
+	 //½«KERNEL_START=0xc0008000Ó³Éäµ½r0=r4+offset=0x20007000
+add	r0, r4,  #(KERNEL_START & 0xff000000) >> 18 
+Õâ¸ö¼ÆËã¹ı³Ì¾ÍÊÇËã³ö£¬Õâ¸öĞéÄâµØÖ·¶ÔÓ¦ÓÚÒ³±íÏîÖĞµÄÄÄ¸öµØÖ·£¬ÒòÎªËûÕâ¸ö¶ÎÊ½Ó³ÉäÎª×î¼òµ¥µÄ
+16kÊı¾İÒ³±í£¬Ò²¾ÍÊÇ4096¸öÏîÄ¿£¬Ã¿¸öÏîÄ¿¶ÔÓ¦1M£¬Ò»¹²¶ÔÓ¦4g¡£
+
+
+ 0x20007000
+ 0x20006000
+ 0x20005000    
+ 0x20004000	   
+
+ //0x20005000 ¸ú 	0x20004000 ÊÇ4kµÄÊı¾İ£¬Ò²¾Í·ÅÁË1KÕÅ±í¸ñ£¬Ã¿¸ö±í¸ñ¶ÔÓ¦1M¿Õ¼ä£¬
+ 				ËùÒÔ£¬Ã¿¸ö¶ÎÖ®¼äÊÇ1gµÄÓ³Éä£¬
+ 				¸ÕºÃ0xc000 0000 ¶ÔÓ¦ÔÚ 0x20007000
+
+ ËùÒÔÎÒ¾õµÃÕâ¶Î´úÂëÊÇ´Ó0xc000 0000 Ó³ÉäÁË´Ó0x2000 0000 Õâ¸öÎïÀíµØÖ·¿ªÊ¼µ½´úÂë½áÊøµÄµØ·½¶¼Ó³ÉäÁË
+   
+	*/
+	// r4 = physical page table address =0x20004000
+	////KERNEL_START = KERNEL_RAM_VADDR ÊÇ 0xc0008000
+	//(KERNEL_START & 0xff000000) >> 18  = (0xc0008000 & 0x0xff000000)>>18 = 0x00003000
+	add	r0, r4,  #(KERNEL_START & 0xff000000) >> 18  //0x00003000 + 0x20004000 = 0x20007000
+
+	str	r3, [r0, #(KERNEL_START & 0x00f00000) >> 18]!
+	ldr	r6, =(KERNEL_END - 1)
+	add	r0, r0, #4         //¼´ÏÂÒ»¸öÒ³±íÏîµÄÆğÊ¼µØÖ·¡£
+	add	r6, r4, r6, lsr #18  //r6 = r4 + r6 >> 18¡£ //¼ÆËã×îºóÒ»¸öµØÖ·ÌõÄ¿´æ·ÅµÄÎ»ÖÃ
+1:	cmp	r0, r6   //Ìî³äÕâÖ®¼äµÄµØÖ·ÌõÄ¿
+	add	r3, r3, #1 << 20  //¼´½«r3µÄÖµ¼Ó1MB¡£
+	strls	r3, [r0], #4
+	bls	1b
+	// //Ã¿Ò»¸öµØÖ·ÌõÄ¿´ú±íÁË1MB¿Õ¼äµÄµØÖ·Ó³Éä¡£ÎïÀíµØÖ·½«´Ó  
+
+	//2017.3.30¸üÕı£¬ÒòÎªËäÈ»Ëû²Ù×÷ÉÏ¿´ºÃÏñÊÇ c0008000µ½ 20008000µÄÓ³Éä£¬µ«Êµ¼ÊÉÏËû
+	//ÒÆÀ´ÒÆÈ¥£¬¶¼ÊÇ×öµÄ¶ÎµÄÓ³Éä£¬Ò²¾ÍÊÇÒ»´Î¾ÍÊÇ1MµÄÓ³Éä£¬ËùÒÔÕâ¸ö²Ù×÷Êµ¼ÊÉÏÊÇ½«0xc0000000
+  //Ó³Éäµ½ 20000000, Ò»¹²Ò»MµÄµØÖ·£¬Èç¹ûkernel³¬¹ı1M,Ôò¼ÌĞøÓ³Éä
+ 
+
+#ifdef CONFIG_XIP_KERNEL
+	/*
+	 * Map some ram to cover our .data and .bss areas.
+	 */
+	add	r3, r8, #TEXT_OFFSET
+	orr	r3, r3, r7
+	add	r0, r4,  #(KERNEL_RAM_VADDR & 0xff000000) >> 18
+	str	r3, [r0, #(KERNEL_RAM_VADDR & 0x00f00000) >> 18]!
+	ldr	r6, =(_end - 1)
+	add	r0, r0, #4
+	add	r6, r4, r6, lsr #18
+1:	cmp	r0, r6
+	add	r3, r3, #1 << 20
+	strls	r3, [r0], #4
+	bls	1b
+#endif
+
+	/*
+	 * Then map boot params address in r2 or
+	 * the first 1MB of ram if boot params address is not specified.
+	 r8=0x2000 0000
+	 */
+	 
+	 /*
+     * È»ºóÓ³ÉäÆô¶¯²ÎÊıÇø£¨ÏÖÔÚr2ÖĞµÄatagsÎïÀíµØÖ·£© 
+     * »òÕß
+     * Èç¹ûÆô¶¯²ÎÊıÇøµÄĞéÄâµØÖ·Ã»ÓĞÈ·¶¨£¨»òÕßÎŞĞ§£©£¬Ôò»áÓ³ÉäRAMµÄÍ·1MB.
+     ×¢Òâ2µÄ20´Î·½ÊÇ1M
+     r2 ÔÚtq210ÖĞºÃÏñÊÇ  0x20000100
+     */
+	mov	r0, r2, lsr #20
+	movs	r0, r0, lsl #20
+	moveq	r0, r8   //@ Èç¹ûatagsÖ¸ÕëÎŞĞ§£¬Ôòr0 = r8£¨Ó³ÉäRAMµÄÍ·1MB£©
+	sub	r3, r0, r8
+	add	r3, r3, #PAGE_OFFSET     //PAGE_OFFSET = 0xC0000000 @ ×ª»»ÎªĞéÄâµØÖ·
+	add	r3, r4, r3, lsr #18  //ÕÒµ½Ó¦¸Ã·ÅÔÚÄÄ¸öµØÖ·ÖĞ @ È·¶¨Ò³±íÏî£¨½ÚÃèÊö·û£©Èë¿ÚµØÖ·
+	orr	r6, r7, r0   //@ Éú³É½ÚÃèÊö·û
+	str	r6, [r3]      //@ ÉèÖÃ½ÚÃèÊö·û
+
+#ifdef CONFIG_DEBUG_LL   //Õâ¸öÃ»ÓĞÉè¶¨
+#ifndef CONFIG_DEBUG_ICEDCC
+	/*
+	 * Map in IO space for serial debugging.
+	 * This allows debug messages to be output
+	 * via a serial console before paging_init.
+	 */
+	addruart r7, r3
+
+	mov	r3, r3, lsr #20
+	mov	r3, r3, lsl #2
+
+	add	r0, r4, r3
+	rsb	r3, r3, #0x4000			@ PTRS_PER_PGD*sizeof(long)
+	cmp	r3, #0x0800			@ limit to 512MB
+	movhi	r3, #0x0800
+	add	r6, r0, r3
+	mov	r3, r7, lsr #20
+	ldr	r7, [r10, #PROCINFO_IO_MMUFLAGS] @ io_mmuflags
+	orr	r3, r7, r3, lsl #20
+1:	str	r3, [r0], #4
+	add	r3, r3, #1 << 20
+	teq	r0, r6
+	bne	1b
+
+#else /* CONFIG_DEBUG_ICEDCC */
+	/* we don't need any serial debugging mappings for ICEDCC */
+	ldr	r7, [r10, #PROCINFO_IO_MMUFLAGS] @ io_mmuflags
+#endif /* !CONFIG_DEBUG_ICEDCC */
+
+#if defined(CONFIG_ARCH_NETWINDER) || defined(CONFIG_ARCH_CATS)
+	/*
+	 * If we're using the NetWinder or CATS, we also need to map
+	 * in the 16550-type serial port for the debug messages
+	 */
+	add	r0, r4, #0xff000000 >> 18
+	orr	r3, r7, #0x7c000000
+	str	r3, [r0]
+#endif
+#ifdef CONFIG_ARCH_RPC
+	/*
+	 * Map in screen at 0x02000000 & SCREEN2_BASE
+	 * Similar reasons here - for debug.  This is
+	 * only for Acorn RiscPC architectures.
+	 */
+	add	r0, r4, #0x02000000 >> 18
+	orr	r3, r7, #0x02000000
+	str	r3, [r0]
+	add	r0, r4, #0xd8000000 >> 18
+	str	r3, [r0]
+#endif
+#endif
+	mov	pc, lr
+ENDPROC(__create_page_tables)
+	.ltorg
+	.align
+__enable_mmu_loc:
+	.long	.
+	.long	__enable_mmu
+	.long	__enable_mmu_end
+
+#if defined(CONFIG_SMP)
+	__CPUINIT
+ENTRY(secondary_startup)
+	/*
+	 * Common entry point for secondary CPUs.
+	 *
+	 * Ensure that we're in SVC mode, and IRQs are disabled.  Lookup
+	 * the processor type - there is no need to check the machine type
+	 * as it has already been validated by the primary processor.
+	 */
+	setmode	PSR_F_BIT | PSR_I_BIT | SVC_MODE, r9
+	mrc	p15, 0, r9, c0, c0		@ get processor id
+	bl	__lookup_processor_type
+	movs	r10, r5				@ invalid processor?
+	moveq	r0, #'p'			@ yes, error 'p'
+ THUMB( it	eq )		@ force fixup-able long branch encoding
+	beq	__error_p
+
+	/*
+	 * Use the page tables supplied from  __cpu_up.
+	 */
+	adr	r4, __secondary_data
+	ldmia	r4, {r5, r7, r12}		@ address to jump to after
+	sub	lr, r4, r5			@ mmu has been enabled
+	ldr	r4, [r7, lr]			@ get secondary_data.pgdir
+	add	r7, r7, #4
+	ldr	r8, [r7, lr]			@ get secondary_data.swapper_pg_dir
+	adr	lr, BSYM(__enable_mmu)		@ return address
+	mov	r13, r12			@ __secondary_switched address
+ ARM(	add	pc, r10, #PROCINFO_INITFUNC	) @ initialise processor
+						  @ (return control reg)
+ THUMB(	add	r12, r10, #PROCINFO_INITFUNC	)
+ THUMB(	mov	pc, r12				)
+ENDPROC(secondary_startup)
+
+	/*
+	 * r6  = &secondary_data
+	 */
+ENTRY(__secondary_switched)
+	ldr	sp, [r7, #4]			@ get secondary_data.stack
+	mov	fp, #0
+	b	secondary_start_kernel
+ENDPROC(__secondary_switched)
+
+	.align
+
+	.type	__secondary_data, %object
+__secondary_data:
+	.long	.
+	.long	secondary_data
+	.long	__secondary_switched
+#endif /* defined(CONFIG_SMP) */
+
+
+
+/*
+ * Setup common bits before finally enabling the MMU.  Essentially
+ * this is just loading the page table pointer and domain access
+ * registers.
+ *
+ *  r0  = cp#15 control register
+ *  r1  = machine ID
+ *  r2  = atags or dtb pointer
+ *  r4  = page table pointer
+ *  r9  = processor ID
+ *  r13 = *virtual* address to jump to upon completion
+ */
+
+/*
+´ËÊ±,Ò»Ğ©ÌØ¶¨¼Ä´æÆ÷µÄÖµÈçÏÂËùÊ¾:
+r0 = c1 parameters      (ÓÃÀ´ÅäÖÃ¿ØÖÆ¼Ä´æÆ÷µÄ²ÎÊı)        
+r4 = pgtbl              (page table µÄÎïÀí»ùµØÖ·)
+r8 = machine info       (struct machine_descµÄ»ùµØÖ·)
+r9 = cpu id             (Í¨¹ıcp15Ğ­´¦ÀíÆ÷»ñµÃµÄcpu id)
+r10 = procinfo          (struct proc_info_listµÄ»ùµØÖ·)
+
+*/
+__enable_mmu:
+#ifdef CONFIG_ALIGNMENT_TRAP  //@¸ù¾İÅäÖÃÊ¹ÄÜ»ò½ûÖ¹µØÖ·¶ÔÆë´íÎó¼ì²â¡£
+	orr	r0, r0, #CR_A
+#else
+	bic	r0, r0, #CR_A
+#endif
+#ifdef CONFIG_CPU_DCACHE_DISABLE  //@¸ù¾İÅäÖÃÊ¹ÄÜ»ò½ûÖ¹Êı¾İcache¡£
+	bic	r0, r0, #CR_C
+#endif
+#ifdef CONFIG_CPU_BPREDICT_DISABLE
+	bic	r0, r0, #CR_Z
+#endif
+#ifdef CONFIG_CPU_ICACHE_DISABLE  // @¸ù¾İÅäÖÃÊ¹ÄÜ»ò½ûÖ¹Ö¸Áîcache¡£
+	bic	r0, r0, #CR_I
+#endif
+	mov	r5, #(domain_val(DOMAIN_USER, DOMAIN_MANAGER) | \
+		      domain_val(DOMAIN_KERNEL, DOMAIN_MANAGER) | \
+		      domain_val(DOMAIN_TABLE, DOMAIN_MANAGER) | \
+		      domain_val(DOMAIN_IO, DOMAIN_CLIENT))  //@ÅäÖÃÏàÓ¦µÄ·ÃÎÊÈ¨ÏŞ²¢´æÈër5¡£
+	mcr	p15, 0, r5, c3, c0, 0		@ load domain access register  //@ load domain access register°Ñ·ÃÎÊÈ¨ÏŞĞ´ÈëCP15Ğ­´¦ÀíÆ÷¡£ÉèÖÃÓò·ÃÎÊ¼Ä´æÆ÷C3	
+	mcr	p15, 0, r4, c2, c0, 0		@ load page table pointer  //@ load page table pointer°ÑÒ³±íµØÖ·Ğ´ÈëCP15Ğ­´¦ÀíÆ÷¡£ÉèÖÃÒ³±íµØÖ·c2
+	b	__turn_mmu_on  // @Ìø×ªµ½__turn_mmu_onÀ´´ò¿ªMMU¡£
+ENDPROC(__enable_mmu)
+
+/*
+ * Enable the MMU.  This completely changes the structure of the visible
+ * memory space.  You will not be able to trace execution through this.
+ * If you have an enquiry about this, *please* check the linux-arm-kernel
+ * mailing list archives BEFORE sending another post to the list.
+ *
+ *  r0  = cp#15 control register
+ *  r1  = machine ID
+ *  r2  = atags or dtb pointer
+ *  r9  = processor ID
+ *  r13 = *virtual* address to jump to upon completion
+ *
+ * other registers depend on the function called upon completion
+ */
+	.align	5
+__turn_mmu_on:
+	mov	r0, r0
+	mcr	p15, 0, r0, c1, c0, 0		@ write control reg  // @ write control regĞ´cp15µÄ¿ØÖÆ¼Ä´æÆ÷c1, ÕâÀïÊÇ´ò¿ªmmuµÄ¶¯×÷,Í¬Ê±»á´ò¿ªcacheµÈ(¸ù¾İr0ÏàÓ¦µÄÅäÖÃ)
+	mrc	p15, 0, r3, c0, c0, 0		@ read id reg  //@ read id reg¶ÁÈ¡id¼Ä´æÆ÷.
+	mov	r3, r3
+	mov	r3, r13
+	mov	pc, r3   //@È¡r13µ½pcÖĞ,ÎÒÃÇÇ°ÃæÒÑ¾­¿´µ½ÁË, r13ÖĞ´æ´¢µÄÊÇ __mmap_switched (ÔÚarch/arm/kernel/head_common.S 113ĞĞ),ÏÂÃæ»áÌøµ½__mmap_switched 
+				// Ö®ºó¾ÍÒ»Ö±ÔÚĞéÄâµØÖ·ÖĞÔËĞĞÁË
+__enable_mmu_end:
+ENDPROC(__turn_mmu_on)
+
+
+#ifdef CONFIG_SMP_ON_UP
+	__INIT
+__fixup_smp:
+	and	r3, r9, #0x000f0000	@ architecture version
+	teq	r3, #0x000f0000		@ CPU ID supported?
+	bne	__fixup_smp_on_up	@ no, assume UP
+
+	bic	r3, r9, #0x00ff0000
+	bic	r3, r3, #0x0000000f	@ mask 0xff00fff0
+	mov	r4, #0x41000000
+	orr	r4, r4, #0x0000b000
+	orr	r4, r4, #0x00000020	@ val 0x4100b020
+	teq	r3, r4			@ ARM 11MPCore?
+	moveq	pc, lr			@ yes, assume SMP
+
+	mrc	p15, 0, r0, c0, c0, 5	@ read MPIDR
+	and	r0, r0, #0xc0000000	@ multiprocessing extensions and
+	teq	r0, #0x80000000		@ not part of a uniprocessor system?
+	moveq	pc, lr			@ yes, assume SMP
+
+__fixup_smp_on_up:
+	adr	r0, 1f
+	ldmia	r0, {r3 - r5}
+	sub	r3, r0, r3
+	add	r4, r4, r3
+	add	r5, r5, r3
+	b	__do_fixup_smp_on_up
+ENDPROC(__fixup_smp)
+
+	.align
+1:	.word	.
+	.word	__smpalt_begin
+	.word	__smpalt_end
+
+	.pushsection .data
+	.globl	smp_on_up
+smp_on_up:
+	ALT_SMP(.long	1)
+	ALT_UP(.long	0)
+	.popsection
+#endif
+
+	.text
+__do_fixup_smp_on_up:
+	cmp	r4, r5
+	movhs	pc, lr
+	ldmia	r4!, {r0, r6}
+ ARM(	str	r6, [r0, r3]	)
+ THUMB(	add	r0, r0, r3	)
+#ifdef __ARMEB__
+ THUMB(	mov	r6, r6, ror #16	)	@ Convert word order for big-endian.
+#endif
+ THUMB(	strh	r6, [r0], #2	)	@ For Thumb-2, store as two halfwords
+ THUMB(	mov	r6, r6, lsr #16	)	@ to be robust against misaligned r3.
+ THUMB(	strh	r6, [r0]	)
+	b	__do_fixup_smp_on_up
+ENDPROC(__do_fixup_smp_on_up)
+
+ENTRY(fixup_smp)
+	stmfd	sp!, {r4 - r6, lr}
+	mov	r4, r0
+	add	r5, r0, r1
+	mov	r3, #0
+	bl	__do_fixup_smp_on_up
+	ldmfd	sp!, {r4 - r6, pc}
+ENDPROC(fixup_smp)
+
+#ifdef CONFIG_ARM_PATCH_PHYS_VIRT
+
+/* __fixup_pv_table - patch the stub instructions with the delta between
+ * PHYS_OFFSET and PAGE_OFFSET, which is assumed to be 16MiB aligned and
+ * can be expressed by an immediate shifter operand. The stub instruction
+ * has a form of '(add|sub) rd, rn, #imm'.
+ */
+	__HEAD
+__fixup_pv_table:
+	adr	r0, 1f
+	ldmia	r0, {r3-r5, r7}
+	sub	r3, r0, r3	@ PHYS_OFFSET - PAGE_OFFSET
+	add	r4, r4, r3	@ adjust table start address
+	add	r5, r5, r3	@ adjust table end address
+	add	r7, r7, r3	@ adjust __pv_phys_offset address
+	str	r8, [r7]	@ save computed PHYS_OFFSET to __pv_phys_offset
+#ifndef CONFIG_ARM_PATCH_PHYS_VIRT_16BIT
+	mov	r6, r3, lsr #24	@ constant for add/sub instructions
+	teq	r3, r6, lsl #24 @ must be 16MiB aligned
+#else
+	mov	r6, r3, lsr #16	@ constant for add/sub instructions
+	teq	r3, r6, lsl #16	@ must be 64kiB aligned
+#endif
+THUMB(	it	ne		@ cross section branch )
+	bne	__error
+	str	r6, [r7, #4]	@ save to __pv_offset
+	b	__fixup_a_pv_table
+ENDPROC(__fixup_pv_table)
+
+	.align
+1:	.long	.
+	.long	__pv_table_begin
+	.long	__pv_table_end
+2:	.long	__pv_phys_offset
+
+	.text
+__fixup_a_pv_table:
+#ifdef CONFIG_THUMB2_KERNEL
+#ifdef CONFIG_ARM_PATCH_PHYS_VIRT_16BIT
+	lsls	r0, r6, #24
+	lsr	r6, #8
+	beq	1f
+	clz	r7, r0
+	lsr	r0, #24
+	lsl	r0, r7
+	bic	r0, 0x0080
+	lsrs	r7, #1
+	orrcs   r0, #0x0080
+	orr	r0, r0, r7, lsl #12
+#endif
+1:	lsls	r6, #24
+	beq	4f
+	clz	r7, r6
+	lsr	r6, #24
+	lsl	r6, r7
+	bic	r6, #0x0080
+	lsrs	r7, #1
+	orrcs	r6, #0x0080
+	orr	r6, r6, r7, lsl #12
+	orr	r6, #0x4000
+	b	4f
+2:	@ at this point the C flag is always clear
+	add     r7, r3
+#ifdef CONFIG_ARM_PATCH_PHYS_VIRT_16BIT
+	ldrh	ip, [r7]
+	tst	ip, 0x0400	@ the i bit tells us LS or MS byte
+	beq	3f
+	cmp	r0, #0		@ set C flag, and ...
+	biceq	ip, 0x0400	@ immediate zero value has a special encoding
+	streqh	ip, [r7]	@ that requires the i bit cleared
+#endif
+3:	ldrh	ip, [r7, #2]
+	and	ip, 0x8f00
+	orrcc	ip, r6	@ mask in offset bits 31-24
+	orrcs	ip, r0	@ mask in offset bits 23-16
+	strh	ip, [r7, #2]
+4:	cmp	r4, r5
+	ldrcc	r7, [r4], #4	@ use branch for delay slot
+	bcc	2b
+	bx	lr
+#else
+#ifdef CONFIG_ARM_PATCH_PHYS_VIRT_16BIT
+	and	r0, r6, #255	@ offset bits 23-16
+	mov	r6, r6, lsr #8	@ offset bits 31-24
+#else
+	mov	r0, #0		@ just in case...
+#endif
+	b	3f
+2:	ldr	ip, [r7, r3]
+	bic	ip, ip, #0x000000ff
+	tst	ip, #0x400	@ rotate shift tells us LS or MS byte
+	orrne	ip, ip, r6	@ mask in offset bits 31-24
+	orreq	ip, ip, r0	@ mask in offset bits 23-16
+	str	ip, [r7, r3]
+3:	cmp	r4, r5
+	ldrcc	r7, [r4], #4	@ use branch for delay slot
+	bcc	2b
+	mov	pc, lr
+#endif
+ENDPROC(__fixup_a_pv_table)
+
+ENTRY(fixup_pv_table)
+	stmfd	sp!, {r4 - r7, lr}
+	ldr	r2, 2f			@ get address of __pv_phys_offset
+	mov	r3, #0			@ no offset
+	mov	r4, r0			@ r0 = table start
+	add	r5, r0, r1		@ r1 = table size
+	ldr	r6, [r2, #4]		@ get __pv_offset
+	bl	__fixup_a_pv_table
+	ldmfd	sp!, {r4 - r7, pc}
+ENDPROC(fixup_pv_table)
+
+	.align
+2:	.long	__pv_phys_offset
+
+	.data
+	.globl	__pv_phys_offset
+	.type	__pv_phys_offset, %object
+__pv_phys_offset:
+	.long	0
+	.size	__pv_phys_offset, . - __pv_phys_offset
+__pv_offset:
+	.long	0
+#endif
+
+#include "head-common.S"

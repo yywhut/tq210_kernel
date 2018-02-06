@@ -1,0 +1,60 @@
+[  186.915556] Allocate memory success!. The phy mem addr=19a98000, size=16384
+[  186.915560] kernel_memaddr is 19a98000
+[  186.915562] kernel_memaddr is 430538752
+[  186.915564] kernel_memaddr is ffff880019a98000
+[  186.915566] kpa = ffff880019a98000, kernel string = hello world from kernel virtual space
+[  186.915568] kpa = ffff880019a99000, kernel string = woshiyy
+[  186.915661] the mmap miscdevice registered
+[  196.918562] timer_func:hello world from kernel virtual space
+[  206.927893] timer_func:hello world from kernel virtual space
+[  216.936305] timer_func:hello world from kernel virtual space
+[  226.945592] timer_func:hello world from kernel virtual space
+[  231.493793] MMAP_DEMO mmap_demo device open
+[  231.494890] MMAP_DEMO start is 165556224
+[  231.495776] MMAP_DEMO size is 16384
+[  231.496570] MMAP_DEMO vma->vm_pgoff is 0
+[  231.497481] vmf->virtual_address = 165556224
+[  231.497482] vma->vm_start = 165556224
+[  231.497483] vma->vm_pgoff = 0
+[  231.497484] kernel_memaddr = ffff880019a98000
+[  231.497485] pageptr = ffff880019a98000
+[  231.497486] sssssssss
+[  231.497487] 111111
+[  231.497487] 22222
+[  231.497488] 33333
+[  231.497566] vmf->virtual_address = 165560320
+[  231.497567] vma->vm_start = 165556224
+[  231.497568] vma->vm_pgoff = 0
+[  231.497569] kernel_memaddr = ffff880019a98000
+[  231.497570] pageptr = ffff880019a99000
+[  231.497570] sssssssss
+[  231.497571] 111111
+[  231.497572] 22222
+[  231.497572] 33333
+[  231.497694] BUG: Bad page state in process test.o  pfn:19a99
+[  231.499023] page:ffffea000059d178 count:0 mapcount:0 mapping:          (null) index:0x0
+[  231.500934] page flags: 0x100000000000404(referenced|reserved)
+[  231.502427] Pid: 2263, comm: test.o Tainted: P            3.0.0-12-generic #20-Ubuntu
+[  231.502428] Call Trace:
+[  231.502438]  [<ffffffff811111bb>] ? dump_page+0x9b/0xd0
+[  231.502441]  [<ffffffff81111298>] bad_page.part.60+0xa8/0x100
+[  231.502443]  [<ffffffff81111308>] bad_page+0x18/0x30
+[  231.502445]  [<ffffffff81111e2e>] free_pages_prepare+0x10e/0x120
+[  231.502447]  [<ffffffff81111f99>] free_hot_cold_page+0x49/0x1a0
+[  231.502450]  [<ffffffff810329b9>] ? default_spin_lock_flags+0x9/0x10
+[  231.502453]  [<ffffffff81112334>] __pagevec_free+0x54/0xd0
+[  231.502455]  [<ffffffff81115e6c>] release_pages+0x24c/0x280
+[  231.502457]  [<ffffffff8112e765>] ? unmap_page_range+0x285/0x2f0
+[  231.502460]  [<ffffffff8113fa0e>] free_pages_and_swap_cache+0x9e/0xc0
+[  231.502465]  [<ffffffff812e7ecd>] ? cpumask_any_but+0x2d/0x40
+[  231.502468]  [<ffffffff8112c4dc>] tlb_flush_mmu+0x6c/0x90
+[  231.502470]  [<ffffffff8112c514>] tlb_finish_mmu+0x14/0x40
+[  231.502473]  [<ffffffff8113371d>] unmap_region+0x10d/0x130
+[  231.502475]  [<ffffffff812ee73e>] ? rb_erase+0xce/0x150
+[  231.502478]  [<ffffffff811333f2>] ? detach_vmas_to_be_unmapped+0x92/0xe0
+[  231.502481]  [<ffffffff8104e589>] ? finish_task_switch+0x49/0xf0
+[  231.502483]  [<ffffffff81134af5>] do_munmap+0x295/0x2f0
+[  231.502485]  [<ffffffff811361c3>] sys_munmap+0x53/0x80
+[  231.502489]  [<ffffffff815f22c2>] system_call_fastpath+0x16/0x1b
+[  231.507334] MMAP_DEMO mmap_demo device closed
+[  236.955006] timer_func:dfsaffafadfff

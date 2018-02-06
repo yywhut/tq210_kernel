@@ -1,0 +1,55 @@
+config VIDEO_FIMC
+	bool "Samsung Camera Interface (FIMC) driver"
+	depends on VIDEO_SAMSUNG && ARCH_S5PV210
+	default n
+	help
+	  This is a video4linux driver for Samsung FIMC device.
+
+
+config VIDEO_OV3640
+        bool "camera ov3640"
+        depends on VIDEO_FIMC
+        help
+          camera ov3640 for TQ210
+config VIDEO_OV9650
+        bool "camera ov9650"
+        depends on VIDEO_FIMC
+        help
+          camera ov9650 for TQ210
+
+config VIDEO_TVP5150
+        bool "camera tvp5150"
+        depends on VIDEO_FIMC
+        help
+          camera tvp5150 for TQ210
+config VIDEO_SAA7113
+        bool "camera saa7113"
+        depends on VIDEO_FIMC
+        help
+          camera saa7113 for TQ210
+
+choice
+depends on VIDEO_FIMC
+prompt "Select CSC Range config"
+default VIDEO_FIMC_RANGE_NARROW
+config VIDEO_FIMC_RANGE_NARROW
+	bool "Narrow"
+	depends on VIDEO_FIMC && ARCH_S5PV210
+	---help---
+	  RGB <-> YUV Color Conversion Narrow Range Equation
+
+config VIDEO_FIMC_RANGE_WIDE
+	bool "Wide"
+	depends on VIDEO_FIMC && ARCH_S5PV210
+	---help---
+	  RGB <-> YUV Color Conversion Wide Range Equation
+endchoice	
+
+config VIDEO_FIMC_DEBUG
+	bool "FIMC driver debug messages"
+	depends on VIDEO_FIMC
+
+config VIDEO_FIMC_MIPI
+	bool "MIPI-CSI2 Slave Interface support"
+	depends on VIDEO_FIMC && ARCH_S5PV210
+	default y
