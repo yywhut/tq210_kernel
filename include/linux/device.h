@@ -598,7 +598,7 @@ struct device {
 	spinlock_t		devres_lock;
 	struct list_head	devres_head;
 
-	struct klist_node	knode_class;
+	struct klist_node	knode_class;//设备所属类的设备集节点，用于链入具有相同类的设备链表中。该链的表头为class->p -> class_devices。
 	struct class		*class;
 	const struct attribute_group **groups;	/* optional groups */
 

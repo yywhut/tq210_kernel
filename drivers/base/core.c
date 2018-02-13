@@ -1045,6 +1045,7 @@ dev->parent.kobj，也就是等于platform_bus.kobj ，后面会详细分析
 		/* tie the class to the device */
 		klist_add_tail(&dev->knode_class,   /*将device添加到class的类设备链表中*/
 			       &dev->class->p->klist_devices);
+	// 把dev->knode_class 这个节点放入dev->class->p->klist_devices这个链表
 
 		/* notify any interfaces that the device is here */
 		list_for_each_entry(class_intf,

@@ -3,7 +3,7 @@
  *
  *  Copyright (C) 1995-2005 Russell King
  *
- * This program is free softwlllare; you can redistribute it and/or modify
+ * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
@@ -625,7 +625,7 @@ static void __init alloc_init_section(pud_t *pud, unsigned long addr,
 
 	//这个pmd_t结构就只是一个ulong大小了，这里函数pmd_offset的实现就是pmd = (pmd_t *)pgd，
 	//地址不变，但类型转变，意思很明显；
-	pmd_t *pmd = pmd_offset(pud, addr);  //
+	pmd_t *pmd = pmd_offset(pud, addr);
 
 	/*
 	 * Try a section mapping - end, addr and phys must all be aligned

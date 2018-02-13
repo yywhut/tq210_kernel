@@ -359,6 +359,8 @@ EXPORT_SYMBOL_GPL(class_dev_iter_exit);
  * @fn is allowed to do anything including calling back into class
  * code.  There's no locking restriction.
  */
+
+//class_for_each_device(power_supply_class, NULL, psy,__power_supply_changed_work);
 int class_for_each_device(struct class *class, struct device *start,
 			  void *data, int (*fn)(struct device *, void *))
 {

@@ -41,7 +41,7 @@ struct subsys_private {
 
 	struct kset *drivers_kset;
 	struct klist klist_devices;
-	struct klist klist_drivers;
+	struct klist klist_drivers;  // 这里应该是链表头，后续添加的设备都往这个表头上来连接
 	struct blocking_notifier_head bus_notifier;
 	unsigned int drivers_autoprobe:1;
 	struct bus_type *bus;

@@ -1,5 +1,5 @@
 /******************************************************************************
- * Xen balloon functionality;;;
+ * Xen balloon functionality
  */
 
 #define RETRY_UNLIMITED	0

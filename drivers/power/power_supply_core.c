@@ -27,10 +27,11 @@ static struct device_type power_supply_dev_type;
 
 static int __power_supply_changed_work(struct device *dev, void *data)
 {
-	struct power_supply *psy = (struct power_supply *)data;
-	struct power_supply *pst = dev_get_drvdata(dev);
+	struct power_supply *psy = (struct power_supply *)data;//当前的，肯定是上级供电，类似charger
+	struct power_supply *pst = dev_get_drvdata(dev);   // 类似battery
 	int i;
 
+	// 在这里判断，只有名字相当才执行
 	for (i = 0; i < psy->num_supplicants; i++)
 		if (!strcmp(psy->supplied_to[i], pst->name)) {
 			if (pst->external_power_changed)
@@ -52,6 +53,7 @@ static void power_supply_changed_work(struct work_struct *work)
 		psy->changed = false;
 		spin_unlock_irqrestore(&psy->changed_lock, flags);
 
+	//这里只是把power_supply_class 类上的device全部找出来，执行__power_supply_changed_work
 		class_for_each_device(power_supply_class, NULL, psy,
 				      __power_supply_changed_work);
 
